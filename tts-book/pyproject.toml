@@ -1,0 +1,35 @@
+[project]
+name = "tts-book"
+version = "0.1.0"
+description = "Audioknihy z YAML scénáře s režií hlasů přes Gemini TTS"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "PyYAML>=6.0",
+    "httpx>=0.27",
+    "typer>=0.12",
+    "rich>=13.7",
+]
+
+[project.scripts]
+tts-book = "tts_book.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8", "jsonschema>=4.21"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tts_book"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "E", "W", "I", "B", "UP"]

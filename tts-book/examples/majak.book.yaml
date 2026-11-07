@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../schema/tts-book.schema.json
+#
+# Ukázková kniha pro tts-book – krátká povídka (vlastní text, volně k použití).
+# Vyzkoušení bez API klíče:   tts-book render examples/majak.book.yaml --engine mock
+# Ostrý render přes Gemini:   tts-book plan examples/majak.book.yaml
+#                             tts-book render examples/majak.book.yaml
+
+version: 1
+
+meta:
+  title: Maják
+  author: tts-book (ukázka)
+  language: cs-CZ
+
+engine:
+  name: gemini
+  model: gemini-3.8-flash-tts
+
+output:
+  format: mp3
+  bitrate: 128k
+  read_titles: true
+  pauses:
+    paragraph: 0.8s
+    title: 1.5s
+
+defaults:
+  speaker: narrator
+  direction: přednes audioknihy, přirozeně, bez spěchu
+
+cast:
+  narrator:
+    name: Vypravěč
+    voice: Charon
+    style: klidný, vřelý, střední tempo
+  marta:
+    name: Marta, strážkyně majáku
+    voice: Sulafat
+    design: starší žena od moře, hluboký, lehce zastřený hlas, mluví úsporně
+    style: věcně, s nadhledem
+  tomas:
+    name: Tomáš, její vnuk
+    voice: Puck
+    style: kluk kolem deseti let, zvědavý, rychlejší
+  namornik:
+    name: Neznámý námořník
+    voice: Fenrir
+
+lexicon:
+  "km": "kilometrů"
+  "atd.": "a tak dále"
+
+chapters:
+  - id: bourka
+    title: Kapitola první – Bouřka
+    direction: napjatá, ale tichá nálada
+    paragraphs:
+      # Prostý řetězec = odstavec jen s textem, čte výchozí mluvčí.
+      - >
+        Maják stál na útesu tak dlouho, že si ho lidé ve vesnici přestali
+        všímat. Svítil každou noc, dvanáct km daleko na moře, a nikdo se
+        neptal, kdo ho rozsvěcí.
+
+      - id: bourka.marta-okno
+        speaker: marta
+        direction: tiše, skoro pro sebe
+        text: "[sigh] Zase se to žene od severu."
+
+      # Odstavec složený ze segmentů: přímá řeč + uvozovací věta vypravěče.
+      - segments:
+          - speaker: tomas
+            direction: vzrušeně, nedočkavě
+            text: "„Babi, můžu dneska nahoru se světlem?“"
+          - text: zeptal se Tomáš a už stál u točitých schodů.
+        pause_after: 1.2s
+
+      - speaker: marta
+        text: "Můžeš. [short pause] Ale držíš se zábradlí a nic neříkáš, dokud nejsme nahoře."
+
+      - >
+        Venku se zvedl vítr. Staré bouřkové sklo, které Marta kdysi sama
+        zasklila, poprvé po letech zadrnčelo. Marta beze slova chystala lampu,
+        sirky, náhradní knoty atd.
+
+  - id: lod
+    title: Kapitola druhá – Loď
+    direction: zrychlující se, naléhavá
+    paragraphs:
+      - Nahoře bylo slyšet jen moře. A pak, mezi dvěma poryvy, ještě něco.
+
+      - speaker: tomas
+        direction: polohlasem, vyděšeně
+        text: "„Babi… tam někdo volá.“"
+
+      # Cizojazyčná věta – jazyk se dá přepsat u odstavce i segmentu.
+      - segments:
+          - text: "Z temnoty se ozvalo zoufalé:"
+          - speaker: namornik
+            language: en-US
+            direction: z dálky, křičí přes vítr
+            text: "„Help! Is anybody there?“"
+
+      - speaker: marta
+        direction: pevně, rozhodně
+        text: Podej mi lampu. A pak běž dolů a zavolej přístav.
+
+      - id: lod.konec
+        text: >
+          Toho večera maják svítil jinak než kdy předtím. Ne pro moře, ale pro
+          jednu jedinou loď, která se k němu pomalu, opatrně vracela.
+        pause_after: 2s
+
+  - id: poznamky
+    title: Poznámky k vydání
+    skip: true   # tahle kapitola se nerenderuje
+    paragraphs:
+      - Tato kapitola slouží jen jako ukázka volby skip.
