@@ -11,7 +11,8 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from .model import Book, Chapter, Paragraph, Segment
+from . import xtts
+from .model import Book, Chapter, Paragraph, Segment, model_for
 from .text import (
     apply_lexicon,
     chunk_text,
@@ -19,6 +20,7 @@ from .text import (
     convert_tags,
     find_tags,
     normalize_whitespace,
+    strip_tags,
 )
 
 CACHE_KEY_VERSION = 1
@@ -192,30 +194,62 @@ def _style_for(book: Book, p: _Para, seg: Segment, speaker: str) -> str | None:
 # --- Kontrola -----------------------------------------------------------------
 
 
-def check(book: Book) -> Report:
-    """Sémantická kontrola nad rámec schématu: odkazy, ID, značky, délka režie."""
+def check(book: Book, engine: str | None = None) -> Report:
+    """Sémantická kontrola nad rámec schématu: odkazy, ID, značky, délka režie.
+
+    `engine` (výchozí z knihy) určuje, co musí mít postavy: gemini `voice`, xtts `xtts`,
+    mock nic navíc.
+    """
+    engine = engine or book.engine.name
     report = Report()
     cast = book.cast
+    reported: set[str] = set()
 
     def need_speaker(speaker: str | None, where: str) -> None:
         if speaker is None:
             return
         if speaker not in cast:
             report.errors.append(f"{where}: mluvčí '{speaker}' není v `cast`")
-        elif not cast[speaker].voice:
+            return
+        member = cast[speaker]
+        if engine == "gemini" and not member.voice:
             report.errors.append(
                 f"{where}: mluvčí '{speaker}' má jen `design` – automatické vytvoření hlasu "
                 "zatím není hotové; vytvoř hlas v AI Studiu a ID vlož do `voice`"
             )
+        elif engine == "xtts" and not member.xtts and speaker not in reported:
+            report.errors.append(
+                f"{where}: mluvčí '{speaker}' nemá `xtts` – doplň `cast.{speaker}.xtts.reference` "
+                f"(nahrávka hlasu) nebo `cast.{speaker}.xtts.speaker` (vestavěný hlas)"
+            )
+            reported.add(speaker)
 
     need_speaker(book.defaults.speaker, "defaults.speaker")
 
     for sid, member in cast.items():
-        if member.voice and not (member.voice in PREBUILT_VOICES or member.voice.startswith(("voice_", "voicekey_"))):
+        if (
+            engine == "gemini"
+            and member.voice
+            and not (member.voice in PREBUILT_VOICES or member.voice.startswith(("voice_", "voicekey_")))
+        ):
             report.warnings.append(
                 f"cast.{sid}: hlas '{member.voice}' není mezi předpřipravenými hlasy "
                 "(v pořádku, pokud je z knihovny hlasů)"
             )
+
+    if engine == "xtts" and book.engine.sample_rate != xtts.SAMPLE_RATE:
+        report.errors.append(
+            f"engine.sample_rate: XTTS generuje {xtts.SAMPLE_RATE} Hz, nastav `sample_rate: {xtts.SAMPLE_RATE}`"
+        )
+
+    bad_languages: set[str] = set()
+
+    def need_language(language: str, where: str) -> None:
+        if engine == "xtts" and xtts.xtts_language(language) is None and language not in bad_languages:
+            report.errors.append(
+                f"{where}: XTTS nepodporuje jazyk '{language}' (umí: {', '.join(sorted(xtts.XTTS_LANGUAGES))})"
+            )
+            bad_languages.add(language)
 
     chapter_ids: dict[str, int] = {}
     for ci, chapter in enumerate(book.chapters, start=1):
@@ -224,9 +258,12 @@ def check(book: Book) -> Report:
             report.errors.append(f"chapters[{ci - 1}]: ID kapitoly '{cid}' už má kapitola č. {chapter_ids[cid]}")
         chapter_ids.setdefault(cid, ci)
         need_speaker(chapter.speaker, f"{cid}.speaker")
+        if chapter.title:
+            need_language(chapter.language or book.meta.language, f"{cid}.title")
 
     used: set[str] = {book.defaults.speaker}
     para_ids: dict[str, str] = {}
+    xtts_tags_reported = False
     lexicon = compile_lexicon(book.lexicon)
     for p in iter_paragraphs(book):
         where = p.id
@@ -240,9 +277,13 @@ def check(book: Book) -> Report:
             need_speaker(seg.speaker, f"{seg_where}.speaker")
             speaker = _speaker_for(book, p, seg)
             used.add(speaker)
-            _, unknown = find_tags(apply_lexicon(seg.text, lexicon))
+            known, unknown = find_tags(apply_lexicon(seg.text, lexicon))
             for tag in unknown:
                 report.warnings.append(f"{seg_where}: neznámá značka [{tag}] – přečte se jako text")
+            if engine == "xtts" and known and not xtts_tags_reported:
+                report.warnings.append(f"{seg_where}: XTTS neumí značky jako [{known[0]}] – v celé knize se vystřihnou")
+                xtts_tags_reported = True
+            need_language(_language_for(book, p, seg), seg_where)
             style = _style_for(book, p, seg, speaker)
             if style and len(style) > STYLE_WARN_CHARS and not long_style_reported:
                 report.warnings.append(
@@ -265,20 +306,29 @@ def check(book: Book) -> Report:
 # --- Plán ---------------------------------------------------------------------
 
 
-def job_key(*, engine: str, model: str, voice: str, style: str | None, text: str, sample_rate: int) -> str:
-    payload = json.dumps(
-        {
-            "v": CACHE_KEY_VERSION,
-            "engine": engine,
-            "model": model,
-            "voice": voice,
-            "style": style,
-            "text": text,
-            "sample_rate": sample_rate,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-    )
+def job_key(
+    *,
+    engine: str,
+    model: str,
+    voice: str,
+    style: str | None,
+    text: str,
+    sample_rate: int,
+    language: str | None = None,
+) -> str:
+    """Hash všeho, co ovlivňuje audio. `language` jen u enginů, kterým se jazyk posílá (xtts)."""
+    data: dict[str, object] = {
+        "v": CACHE_KEY_VERSION,
+        "engine": engine,
+        "model": model,
+        "voice": voice,
+        "style": style,
+        "text": text,
+        "sample_rate": sample_rate,
+    }
+    if language is not None:
+        data["language"] = language
+    payload = json.dumps(data, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -290,14 +340,42 @@ class _JobFactory:
         self.lexicon = compile_lexicon(book.lexicon)
 
     def prepare_text(self, text: str) -> str:
-        return convert_tags(apply_lexicon(normalize_whitespace(text), self.lexicon))
+        text = apply_lexicon(normalize_whitespace(text), self.lexicon)
+        if self.engine == "xtts":
+            return strip_tags(text)
+        return convert_tags(text)
+
+    def max_chars(self, language: str) -> int:
+        limit = self.book.engine.max_chars
+        if self.engine == "xtts":
+            return min(limit, xtts.char_limit(language))
+        return limit
+
+    def _voice(self, speaker: str, style: str | None) -> tuple[str, str | None]:
+        """(voice, style) pro Job. U xtts je režie zahrnutá ve výběru nahrávky."""
+        member = self.book.cast[speaker]
+        if self.engine == "xtts":
+            assert member.xtts, f"mluvčí {speaker} nemá `xtts` (měl to odhalit check())"
+            return xtts.voice_for(member.xtts, style), None
+        if self.engine == "mock":
+            return member.voice or speaker, style
+        assert member.voice, f"mluvčí {speaker} nemá hlas (měl to odhalit check())"
+        return member.voice, style
 
     def make(self, *, text: str, speaker: str, style: str | None, language: str) -> Job:
-        voice = self.book.cast[speaker].voice
-        assert voice, f"mluvčí {speaker} nemá hlas (měl to odhalit check())"
+        voice, style = self._voice(speaker, style)
         sr = self.book.engine.sample_rate
+        key = job_key(
+            engine=self.engine,
+            model=self.model,
+            voice=voice,
+            style=style,
+            text=text,
+            sample_rate=sr,
+            language=language if self.engine == "xtts" else None,
+        )
         return Job(
-            key=job_key(engine=self.engine, model=self.model, voice=voice, style=style, text=text, sample_rate=sr),
+            key=key,
             text=text,
             voice=voice,
             style=style,
@@ -312,10 +390,9 @@ class _JobFactory:
 def build_plan(book: Book, *, engine: str | None = None, model: str | None = None) -> list[ChapterPlan]:
     """Vytvoří plán renderu. Kniha musí projít `check()` bez chyb."""
     engine = engine or book.engine.name
-    model = model or book.engine.model
+    model = model_for(book, engine, model)
     factory = _JobFactory(book, engine, model)
     pauses = book.output.pauses
-    max_chars = book.engine.max_chars
 
     chapters: dict[str, ChapterPlan] = {}
     order: list[ChapterPlan] = []
@@ -325,11 +402,12 @@ def build_plan(book: Book, *, engine: str | None = None, model: str | None = Non
         cid = chapter_id(chapter, ci)
         read_title = book.output.read_titles if chapter.read_title is None else chapter.read_title
         title_job = None
-        if chapter.title and read_title:
+        title_text = factory.prepare_text(chapter.title) if chapter.title and read_title else ""
+        if title_text:
             narrator = book.defaults.speaker
             member = book.cast[narrator]
             title_job = factory.make(
-                text=factory.prepare_text(chapter.title),
+                text=title_text,
                 speaker=narrator,
                 style=_join_style(book.defaults.direction, member.style),
                 language=chapter.language or book.meta.language,
@@ -351,7 +429,9 @@ def build_plan(book: Book, *, engine: str | None = None, model: str | None = Non
             language = _language_for(book, p, seg)
             text = factory.prepare_text(seg.text)
             chars += len(text)
-            for ki, chunk in enumerate(chunk_text(text, max_chars)):
+            if not text:
+                continue  # segment jen ze značek, které engine vystřihl
+            for ki, chunk in enumerate(chunk_text(text, factory.max_chars(language))):
                 if ki:
                     items.append(Silence(pauses.chunk))
                 items.append(Speech(factory.make(text=chunk, speaker=speaker, style=style, language=language)))

@@ -42,7 +42,7 @@ def test_paragraph_needs_text_xor_segments():
 
 
 def test_cast_needs_voice_or_design():
-    with pytest.raises(ValidationError, match="`voice` nebo `design`"):
+    with pytest.raises(ValidationError, match="`voice`, `design` nebo `xtts`"):
         make_book(cast={"narrator": {"style": "x"}})
 
 
@@ -82,6 +82,7 @@ def test_loader_rejects_duplicate_keys(tmp_path):
 def test_defaults_are_filled():
     book = make_book()
     assert book.engine.model == "gemini-3.8-flash-tts"
+    assert make_book(engine={"name": "xtts"}).engine.model == "tts_models/multilingual/multi-dataset/xtts_v2"
     assert book.output.pauses.paragraph == 0.8
     assert book.defaults.speaker == "narrator"
     assert isinstance(book, Book)

@@ -41,6 +41,8 @@ Neznámé klíče jsou chyba – překlep jako `speakr:` se tak neztratí.
 
 Gemini jazyk pozná sám (umí přes 130 jazyků), takže `language` se do API
 neposílá. Používá se pro dělení textu na věty, budoucí import a další enginy.
+XTTS jazyk naopak potřebuje: z kódu se vezme primární část (`cs-CZ` → `cs`) a musí
+být mezi podporovanými (viz [`cast.<id>.xtts`](#casted-xtts)).
 Jazyk jde přepsat u kapitoly, odstavce i segmentu – třeba u cizojazyčného
 citátu.
 
@@ -48,14 +50,18 @@ citátu.
 
 | klíč | výchozí | popis |
 |---|---|---|
-| `name` | `gemini` | `gemini` = Gemini API přes API klíč, `mock` = offline testovací tóny. |
-| `model` | `gemini-3.8-flash-tts` | Např. `gemini-3.8-flash-lite-tts` (levnější). |
-| `sample_rate` | `24000` | Vzorkovací frekvence v Hz (`24000` nebo `16000`). |
-| `max_chars` | `2000` | Max. znaků na jeden požadavek; delší text se rozdělí po větách. |
+| `name` | `gemini` | `gemini` = Gemini API přes API klíč, `xtts` = lokální XTTS v2 (GPU), `mock` = offline testovací tóny. |
+| `model` | podle enginu | gemini: `gemini-3.8-flash-tts` (nebo levnější `gemini-3.8-flash-lite-tts`); xtts: `tts_models/multilingual/multi-dataset/xtts_v2` nebo cesta ke složce se staženým modelem. |
+| `sample_rate` | `24000` | Vzorkovací frekvence v Hz (`24000` nebo `16000`). XTTS umí jen `24000`. |
+| `max_chars` | `2000` | Max. znaků na jeden požadavek; delší text se rozdělí po větách. U XTTS platí navíc limit jazyka (čeština 186, angličtina 250 znaků). |
 | `api_key_env` | `GEMINI_API_KEY` | Proměnná prostředí s API klíčem. |
 
 Model vrátí nejvýš ~655 s audia na požadavek; 2000 znaků jsou zhruba 2–3 minuty
 řeči, takže je rezerva.
+
+Engine i model jdou přepsat z příkazové řádky (`--engine xtts`, `--model …`).
+Když `--engine` neodpovídá `engine.name` v knize, použije se výchozí model
+zvoleného enginu, ne `engine.model` z knihy.
 
 ## `output`
 
@@ -110,7 +116,10 @@ cast:
 | `style` | Krátký výchozí způsob přednesu postavy. |
 | `name` | Zobrazované jméno. |
 
-Postava musí mít `voice` nebo `design`; k renderu je potřeba `voice`.
+| `xtts` | Hlas pro engine `xtts` – viz [níže](#casted-xtts). |
+
+Postava musí mít `voice`, `design` nebo `xtts`. Gemini k renderu potřebuje `voice`,
+XTTS potřebuje `xtts`. Jedna kniha může mít obojí a engine se vybere při renderu.
 
 **Tip:** Kdo mluví, určuje hlas, ne `style`. Dlouhé popisy postavy ve stylu
 („Audio profile…“, odrážky s režijními pokyny) podle Googlu nejčastěji způsobují,
@@ -134,6 +143,66 @@ a `style` nech na pár slov.
 
 Hlasy nejsou vázané na jazyk – jazyk model pozná z textu. Vyzkoušíš je příkazem
 `tts-book say --voice Kore "Zkušební věta."`.
+
+<a id="casted-xtts"></a>
+
+### `cast.<id>.xtts` – hlas pro XTTS v2
+
+```yaml
+cast:
+  narrator:
+    voice: Charon                  # pro gemini
+    xtts:
+      speaker: Damien Black        # vestavěný hlas XTTS
+  marta:
+    voice: Sulafat
+    xtts:
+      reference: hlasy/marta.wav   # klon z nahrávky (nebo seznam nahrávek)
+      styles:                      # volitelně: nahrávky podle režie
+        šeptem: hlasy/marta-sepot.wav
+        rozčileně: [hlasy/marta-krik1.wav, hlasy/marta-krik2.wav]
+```
+
+| klíč | popis |
+|---|---|
+| `reference` | WAV nahrávka hlasu nebo seznam nahrávek, cesta relativně k souboru knihy. Ideálně 6–30 s čisté řeči bez hudby, šumu a ozvěny. |
+| `speaker` | Vestavěný hlas XTTS (seznam níže). Buď `reference`, nebo `speaker`. |
+| `styles` | `{klíčové slovo: nahrávka}` – nahrávky pro různé polohy hlasu. |
+
+XTTS neumí textovou režii: `direction` a `style` se modelu neposílají. Přednes
+určuje referenční nahrávka. Proto `styles`: když se klíčové slovo (bez ohledu
+na velikost písmen) objeví ve [složené režii](#dědičnost-a-skládání-režie),
+použije se jeho nahrávka. Při více shodách vyhraje klíč, který je v režii nejvíc
+vpravo – tedy z nejkonkrétnější úrovně (segment před odstavcem, ten před
+kapitolou). Bez shody platí `reference` / `speaker`.
+
+Další rozdíly proti Gemini:
+
+- **Značky** (`[sigh]`, `[short pause]` …) XTTS neumí – vystřihnou se a
+  `validate --engine xtts` na to jednou upozorní.
+- **Jazyky:** `en`, `es`, `fr`, `de`, `it`, `pt`, `pl`, `tr`, `ru`, `nl`, `cs`, `ar`,
+  `zh-cn`, `ja`, `hu`, `ko`, `hi`. Jiný jazyk (třeba `sk`) je chyba.
+- **Délka úseku:** text se dělí po větách podle limitu jazyka (cs 186, en 250,
+  de 253, pl 224 znaků …), mezi části se vkládá pauza `output.pauses.chunk`.
+- **Cache:** klíč obsahuje cesty k nahrávkám, ne jejich obsah. Když nahrávku
+  přepíšeš pod stejným jménem, použij `render --force` (nebo nový název souboru).
+- Generování není deterministické, `--only` dá pokaždé novou verzi.
+
+Vestavěné hlasy XTTS v2: Claribel Dervla, Daisy Studious, Gracie Wise, Tammie Ema,
+Alison Dietlinde, Ana Florence, Annmarie Nele, Asya Anara, Brenda Stern,
+Gitta Nikolina, Henriette Usha, Sofia Hellen, Tammy Grit, Tanja Adelina,
+Vjollca Johnnie, Andrew Chipper, Badr Odhiambo, Dionisio Schuyler, Royston Min,
+Viktor Eka, Abrahan Mack, Adde Michal, Baldur Sanjin, Craig Gutsy, Damien Black,
+Gilberto Mathias, Ilkin Urbano, Kazuhiko Atallah, Ludvig Milivoj, Suad Qasim,
+Torcull Diarmuid, Viktor Menelaos, Zacharie Aimilios, Nova Hogarth, Maja Ruoho,
+Uta Obando, Lidiya Szekeres, Chandra MacFarland, Szofi Granger, Camilla Holmström,
+Lilya Stainthorpe, Zofija Kendrick, Narelle Moon, Barbora MacLean,
+Alexandra Hisakawa, Alma María, Rosemary Okafor, Ige Behringer, Filip Traverse,
+Damjan Chapman, Wulf Carlevaro, Aaron Dreschner, Kumar Dahl, Eugenio Mataracı,
+Ferran Simen, Xavier Hayasaka, Luis Moray, Marcos Rudaski.
+
+Hlasy mluví všemi podporovanými jazyky. Vyzkoušíš je příkazem
+`tts-book say --engine xtts --voice "Ana Florence" "Zkušební věta."`.
 
 ## `lexicon` – textové náhrady
 

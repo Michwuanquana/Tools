@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
@@ -15,7 +16,7 @@ from . import __version__
 from .audio import AudioError, write_wav
 from .engines import EngineError, create_engine
 from .loader import BookError, load_book
-from .model import Book
+from .model import Book, model_for
 from .render import (
     assemble_chapter,
     cache_for,
@@ -28,12 +29,12 @@ from .render import (
     write_preview,
 )
 from .resolve import Job, Report, build_plan, check, job_key
-from .text import convert_tags, normalize_whitespace, strip_tags
+from .text import chunk_text, convert_tags, normalize_whitespace, strip_tags
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Audioknihy z YAML scénáře s režií hlasů (Gemini TTS).",
+    help="Audioknihy z YAML scénáře s režií hlasů (Gemini TTS nebo lokální XTTS v2).",
 )
 console = Console()
 err_console = Console(stderr=True)
@@ -51,7 +52,10 @@ PRICES_USD_PER_M = {
 }
 
 BookArg = Annotated[Path, typer.Argument(help="Soubor knihy (*.book.yaml).", exists=True, dir_okay=False)]
-EngineOpt = Annotated[str | None, typer.Option("--engine", "-e", help="Přepíše engine ze souboru: gemini | mock.")]
+EngineOpt = Annotated[
+    str | None, typer.Option("--engine", "-e", help="Přepíše engine ze souboru: gemini | xtts | mock.")
+]
+ENGINES = ("gemini", "xtts", "mock")
 ModelOpt = Annotated[str | None, typer.Option("--model", "-m", help="Přepíše model ze souboru.")]
 
 
@@ -67,13 +71,21 @@ def _num(n: float) -> str:
 
 
 def _print_report(report: Report) -> None:
+    # Hlášky obsahují značky jako [sigh] – bez escape by je rich bral jako svůj markup.
     for e in report.errors:
-        err_console.print(f"[red]chyba[/]  {e}")
+        err_console.print(f"[red]chyba[/]  {escape(e)}")
     for w in report.warnings:
-        err_console.print(f"[yellow]pozor[/]  {w}")
+        err_console.print(f"[yellow]pozor[/]  {escape(w)}")
 
 
-def _load_checked(path: Path) -> Book:
+def _check_engine_name(engine: str | None) -> None:
+    if engine is not None and engine not in ENGINES:
+        err_console.print(f"[red]Neznámý engine '{engine}'[/] (možnosti: {', '.join(ENGINES)})")
+        raise typer.Exit(1)
+
+
+def _load_checked(path: Path, engine: str | None = None) -> Book:
+    _check_engine_name(engine)
     try:
         book = load_book(path)
     except BookError as exc:
@@ -81,7 +93,7 @@ def _load_checked(path: Path) -> Book:
             err_console.print(f"[red]chyba[/]  {p}")
         err_console.print(f"[red]Soubor {path} není platný.[/]")
         raise typer.Exit(1) from None
-    report = check(book)
+    report = check(book, engine)
     _print_report(report)
     if not report.ok:
         err_console.print(f"[red]Soubor {path} obsahuje {len(report.errors)} chyb(y).[/]")
@@ -99,10 +111,10 @@ def _main(
 
 
 @app.command()
-def validate(book_path: BookArg) -> None:
+def validate(book_path: BookArg, engine: EngineOpt = None) -> None:
     """Zkontroluje soubor knihy (schéma, odkazy na postavy, ID, značky)."""
-    book = _load_checked(book_path)
-    chapters = build_plan(book)
+    book = _load_checked(book_path, engine)
+    chapters = build_plan(book, engine=engine)
     paragraphs = sum(len(c.paragraphs) for c in chapters)
     jobs = unique_jobs(j for c in chapters for j in c.jobs)
     chars = sum(len(strip_tags(j.text)) for j in jobs)
@@ -122,9 +134,9 @@ def plan(
     ] = None,
 ) -> None:
     """Zkušební běh: co se bude generovat, co je v cache, odhad délky a ceny."""
-    book = _load_checked(book_path)
+    book = _load_checked(book_path, engine)
     engine_name = engine or book.engine.name
-    model_name = model or book.engine.model
+    model_name = model_for(book, engine_name, model)
     chapters = build_plan(book, engine=engine_name, model=model_name)
     cache = cache_for(book, book_path)
 
@@ -193,9 +205,9 @@ def render(
     model: ModelOpt = None,
 ) -> None:
     """Vygeneruje audio a složí kapitoly do souborů."""
-    book = _load_checked(book_path)
+    book = _load_checked(book_path, engine)
     engine_name = engine or book.engine.name
-    model_name = model or book.engine.model
+    model_name = model_for(book, engine_name, model)
     chapters = build_plan(book, engine=engine_name, model=model_name)
     out_dir = output_dir(book, book_path)
     cache = cache_for(book, book_path)
@@ -222,11 +234,16 @@ def render(
         jobs = unique_jobs(j for c in chapters_sel for j in c.jobs)
 
     todo = jobs if force else missing_jobs(jobs, cache)
+    base_dir = book_path.resolve().parent
+    if todo and engine_name == "xtts":
+        _require_references(todo, base_dir)
     try:
-        tts = create_engine(engine_name, book, model=model_name) if todo else None
+        tts = create_engine(engine_name, book, model=model_name, base_dir=base_dir) if todo else None
     except EngineError as exc:
         err_console.print(f"[red]{exc}[/]")
         raise typer.Exit(1) from None
+    if tts is not None:
+        _warn_cpu(tts)
 
     if tts is not None:
         console.print(f"Generuji úseky: {len(todo)} ({engine_name}, {model_name}) …")
@@ -281,50 +298,121 @@ def render(
         raise typer.Exit(1) from None
 
 
+def _require_references(jobs: list[Job], base_dir: Path) -> None:
+    """Chybějící nahrávky ohlásí dřív, než se pracně načte model."""
+    from .engines.xtts import missing_references
+
+    missing = missing_references(jobs, base_dir)
+    if missing:
+        for path in missing:
+            err_console.print(f"[red]chyba[/]  chybí referenční nahrávka {path}")
+        raise typer.Exit(1)
+
+
+def _warn_cpu(tts: object) -> None:
+    if getattr(tts, "device", None) == "cpu":
+        err_console.print(
+            "[yellow]pozor[/]  XTTS běží na CPU – bude to řádově pomalejší. Ověř CUDA: "
+            'uv run python -c "import torch; print(torch.cuda.is_available())"'
+        )
+
+
+def _say_voice(engine: str, voice: str | None) -> str:
+    if engine != "xtts":
+        return voice or "Kore"
+    from .xtts import speaker_spec, wav_spec
+
+    if not voice:
+        err_console.print("[red]U xtts zadej --voice: cestu k WAV nahrávce nebo jméno vestavěného hlasu.[/]")
+        raise typer.Exit(1)
+    if voice.lower().endswith(".wav") or Path(voice).is_file():
+        return wav_spec(voice)
+    return speaker_spec(voice)
+
+
 @app.command()
 def say(
     text: Annotated[str, typer.Argument(help="Text k přečtení (lze použít značky jako [sigh]).")],
-    voice: Annotated[str, typer.Option("--voice", "-v", help="Hlas, např. Kore, Puck, Charon, nebo voice_…")] = "Kore",
-    style: Annotated[str | None, typer.Option("--style", "-s", help="Režie přednesu.")] = None,
+    voice: Annotated[
+        str | None,
+        typer.Option(
+            "--voice",
+            "-v",
+            help="Gemini: Kore, Puck, Charon, voice_… (výchozí Kore). "
+            "XTTS: cesta k WAV nahrávce nebo vestavěný hlas, např. 'Claribel Dervla'.",
+        ),
+    ] = None,
+    style: Annotated[str | None, typer.Option("--style", "-s", help="Režie přednesu (jen gemini).")] = None,
     out: Annotated[Path, typer.Option("--out", "-o", help="Výstupní WAV.")] = Path("say.wav"),
-    model: Annotated[str, typer.Option("--model", "-m")] = "gemini-3.8-flash-tts",
-    engine: Annotated[str, typer.Option("--engine", "-e")] = "gemini",
+    model: Annotated[str | None, typer.Option("--model", "-m", help="Výchozí podle enginu.")] = None,
+    engine: Annotated[str, typer.Option("--engine", "-e", help="gemini | xtts | mock")] = "gemini",
+    language: Annotated[str, typer.Option("--language", "-l", help="Jazyk textu (BCP 47).")] = "cs-CZ",
 ) -> None:
     """Rychlé vyzkoušení hlasu a režie na jedné větě."""
+    from .audio import silence
     from .model import Book as _Book
 
+    _check_engine_name(engine)
+    job_voice = _say_voice(engine, voice)
     book = _Book.model_validate(
         {
             "version": 1,
-            "meta": {"title": "say", "language": "cs-CZ"},
+            "meta": {"title": "say", "language": language},
             "engine": {"name": engine, "model": model},
-            "cast": {"x": {"voice": voice}},
+            "cast": {"x": {"voice": job_voice}},
             "defaults": {"speaker": "x"},
             "chapters": [{"paragraphs": [text]}],
         }
     )
-    prepared = convert_tags(normalize_whitespace(text))
+    model_name = model_for(book, engine, model)
     sr = book.engine.sample_rate
-    job = Job(
-        key=job_key(engine=engine, model=model, voice=voice, style=style, text=prepared, sample_rate=sr),
-        text=prepared,
-        voice=voice,
-        style=style,
-        speaker="x",
-        language="cs-CZ",
-        engine=engine,
-        model=model,
-        sample_rate=sr,
-    )
+    if engine == "xtts":
+        from .xtts import char_limit, xtts_language
+
+        if xtts_language(language) is None:
+            err_console.print(f"[red]XTTS nepodporuje jazyk '{language}'.[/]")
+            raise typer.Exit(1)
+        if style:
+            err_console.print("[yellow]pozor[/]  XTTS režii (--style) nepodporuje, ignoruji ji.")
+        style = None
+        prepared = strip_tags(text)
+        chunks = chunk_text(prepared, char_limit(language)) if prepared else []
+    else:
+        chunks = [convert_tags(normalize_whitespace(text))]
+    if not chunks:
+        err_console.print("[red]Prázdný text.[/]")
+        raise typer.Exit(1)
+
+    jobs = [
+        Job(
+            key=job_key(engine=engine, model=model_name, voice=job_voice, style=style, text=chunk, sample_rate=sr),
+            text=chunk,
+            voice=job_voice,
+            style=style,
+            speaker="x",
+            language=language,
+            engine=engine,
+            model=model_name,
+            sample_rate=sr,
+        )
+        for chunk in chunks
+    ]
+    if engine == "xtts":
+        _require_references(jobs, Path.cwd())
+    pcm: list[bytes] = []
     try:
-        tts = create_engine(engine, book, model=model)
-        pcm = tts.synthesize(job)
+        tts = create_engine(engine, book, model=model_name, base_dir=Path.cwd())
+        _warn_cpu(tts)
+        for i, job in enumerate(jobs):
+            if i:
+                pcm.append(silence(book.output.pauses.chunk, sr))
+            pcm.append(tts.synthesize(job))
         tts.close()
     except EngineError as exc:
         err_console.print(f"[red]{exc}[/]")
         raise typer.Exit(1) from None
-    write_wav(out, [pcm], sr)
-    console.print(f"[green]✓[/] {out} ({_fmt_duration(len(pcm) / (2 * sr))})")
+    write_wav(out, pcm, sr)
+    console.print(f"[green]✓[/] {out} ({_fmt_duration(sum(map(len, pcm)) / (2 * sr))})")
 
 
 @app.command()

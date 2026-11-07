@@ -12,11 +12,26 @@ dependencies = [
     "rich>=13.7",
 ]
 
+[project.optional-dependencies]
+# Lokální XTTS v2 (coqui-tts). Torch < 2.9: novější torchaudio.load vyžaduje torchcodec.
+# coqui-tts 0.28 zapomíná na závislost `six`.
+xtts = ["coqui-tts>=0.27.4", "torch>=2.2,<2.9", "torchaudio>=2.2,<2.9", "six"]
+
 [project.scripts]
 tts-book = "tts_book.cli:app"
 
 [dependency-groups]
 dev = ["pytest>=8", "jsonschema>=4.21"]
+
+# Na Windows je na PyPI jen CPU torch – CUDA build se bere z indexu PyTorch.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+torchaudio = [{ index = "pytorch-cu126", marker = "sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

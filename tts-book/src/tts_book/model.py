@@ -92,14 +92,30 @@ class Meta(Strict):
     )
 
 
+EngineName = Literal["gemini", "xtts", "mock"]
+
+DEFAULT_MODELS: dict[str, str] = {
+    "gemini": "gemini-3.8-flash-tts",
+    "xtts": "tts_models/multilingual/multi-dataset/xtts_v2",
+    "mock": "mock",
+}
+
+
 class Engine(Strict):
-    name: Literal["gemini", "mock"] = Field(
+    name: EngineName = Field(
         "gemini",
-        description=("TTS backend. 'gemini' = Gemini API (API klíč), 'mock' = offline testovací tóny bez volání API."),
+        description=(
+            "TTS backend. 'gemini' = Gemini API (API klíč), 'xtts' = lokální XTTS v2 (coqui-tts, GPU), "
+            "'mock' = offline testovací tóny bez volání API."
+        ),
     )
-    model: str = Field(
-        "gemini-3.8-flash-tts",
-        description="Model Gemini TTS, např. 'gemini-3.8-flash-tts' nebo 'gemini-3.8-flash-lite-tts'.",
+    model: str | None = Field(
+        None,
+        description=(
+            "Model enginu. Když chybí, použije se výchozí: gemini → 'gemini-3.8-flash-tts', "
+            "xtts → 'tts_models/multilingual/multi-dataset/xtts_v2' (u xtts jde zadat i složku "
+            "se staženým modelem)."
+        ),
     )
     sample_rate: Literal[24000, 16000] = Field(24000, description="Vzorkovací frekvence generovaného audia v Hz.")
     max_chars: int = Field(
@@ -115,6 +131,22 @@ class Engine(Strict):
         "GEMINI_API_KEY",
         description="Název proměnné prostředí s API klíčem.",
     )
+
+    @model_validator(mode="after")
+    def _default_model(self) -> Engine:
+        if not self.model:
+            self.model = DEFAULT_MODELS[self.name]
+        return self
+
+
+def model_for(book: Book, engine: str | None = None, override: str | None = None) -> str:
+    """Model pro render: `--model` > model z knihy (jen pro engine z knihy) > výchozí model enginu."""
+    if override:
+        return override
+    engine = engine or book.engine.name
+    if engine == book.engine.name and book.engine.model:
+        return book.engine.model
+    return DEFAULT_MODELS.get(engine, engine)
 
 
 class Pauses(Strict):
@@ -145,8 +177,44 @@ class Output(Strict):
 # --- Obsazení ----------------------------------------------------------------
 
 
+Recording = Annotated[str, StringConstraints(min_length=1)]
+Recordings = Recording | Annotated[list[Recording], Field(min_length=1)]
+
+
+class XttsVoice(Strict):
+    model_config = ConfigDict(json_schema_extra={"oneOf": [{"required": ["reference"]}, {"required": ["speaker"]}]})
+
+    reference: Recordings | None = Field(
+        None,
+        description=(
+            "Referenční nahrávka hlasu (WAV, 6–30 s čisté řeči bez hudby a šumu) nebo seznam nahrávek. "
+            "Cesta relativně k souboru knihy."
+        ),
+    )
+    speaker: str | None = Field(
+        None,
+        description="Vestavěný hlas XTTS (např. 'Claribel Dervla', 'Damien Black'). Buď `reference`, nebo `speaker`.",
+    )
+    styles: dict[NonEmptyText, Recordings] = Field(
+        default_factory=dict,
+        description=(
+            "Nahrávky pro různé polohy hlasu: {klíčové slovo: nahrávka}. Když se klíčové slovo objeví "
+            "ve složené režii (např. 'šeptem'), použije se jeho nahrávka; při více shodách vyhrává ta "
+            "nejvíc vpravo (nejkonkrétnější úroveň). Jinak platí `reference` / `speaker`."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _reference_xor_speaker(self) -> XttsVoice:
+        if (self.reference is None) == (self.speaker is None):
+            raise ValueError("`xtts` potřebuje buď `reference`, nebo `speaker` (ne obojí)")
+        return self
+
+
 class CastMember(Strict):
-    model_config = ConfigDict(json_schema_extra={"anyOf": [{"required": ["voice"]}, {"required": ["design"]}]})
+    model_config = ConfigDict(
+        json_schema_extra={"anyOf": [{"required": ["voice"]}, {"required": ["design"]}, {"required": ["xtts"]}]}
+    )
 
     name: str | None = Field(None, description="Zobrazované jméno postavy (jen pro přehled).")
     voice: str | None = Field(
@@ -171,11 +239,15 @@ class CastMember(Strict):
             "Identitu nese hlas – dlouhé popisy zhoršují stálost hlasu."
         ),
     )
+    xtts: XttsVoice | None = Field(
+        None,
+        description="Hlas pro engine xtts: referenční nahrávka nebo vestavěný hlas, volitelně nahrávky podle režie.",
+    )
 
     @model_validator(mode="after")
     def _voice_or_design(self) -> CastMember:
-        if not self.voice and not self.design:
-            raise ValueError("postava potřebuje `voice` nebo `design`")
+        if not self.voice and not self.design and not self.xtts:
+            raise ValueError("postava potřebuje `voice`, `design` nebo `xtts`")
         return self
 
 

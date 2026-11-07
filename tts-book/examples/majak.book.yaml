@@ -4,6 +4,8 @@
 # Vyzkoušení bez API klíče:   tts-book render examples/majak.book.yaml --engine mock
 # Ostrý render přes Gemini:   tts-book plan examples/majak.book.yaml
 #                             tts-book render examples/majak.book.yaml
+# Lokálně přes XTTS v2 (GPU): tts-book render examples/majak.book.yaml --engine xtts
+#   (`xtts.speaker` = vestavěné hlasy XTTS; vlastní hlas: `xtts.reference: hlasy/marta.wav`)
 
 version: 1
 
@@ -33,18 +35,26 @@ cast:
     name: Vypravěč
     voice: Charon
     style: klidný, vřelý, střední tempo
+    xtts:
+      speaker: Damien Black
   marta:
     name: Marta, strážkyně majáku
     voice: Sulafat
     design: starší žena od moře, hluboký, lehce zastřený hlas, mluví úsporně
     style: věcně, s nadhledem
+    xtts:
+      speaker: Gracie Wise
   tomas:
     name: Tomáš, její vnuk
     voice: Puck
     style: kluk kolem deseti let, zvědavý, rychlejší
+    xtts:
+      speaker: Andrew Chipper
   namornik:
     name: Neznámý námořník
     voice: Fenrir
+    xtts:
+      speaker: Craig Gutsy
 
 lexicon:
   "km": "kilometrů"

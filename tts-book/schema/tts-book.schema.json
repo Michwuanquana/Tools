@@ -13,6 +13,11 @@
           "required": [
             "design"
           ]
+        },
+        {
+          "required": [
+            "xtts"
+          ]
         }
       ],
       "properties": {
@@ -67,6 +72,18 @@
           "default": null,
           "description": "Krátký výchozí způsob přednesu postavy, např. 'klidně, pomaleji'. Identitu nese hlas – dlouhé popisy zhoršují stálost hlasu.",
           "title": "Style"
+        },
+        "xtts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/XttsVoice"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Hlas pro engine xtts: referenční nahrávka nebo vestavěný hlas, volitelně nahrávky podle režie."
         }
       },
       "title": "CastMember",
@@ -220,19 +237,27 @@
       "properties": {
         "name": {
           "default": "gemini",
-          "description": "TTS backend. 'gemini' = Gemini API (API klíč), 'mock' = offline testovací tóny bez volání API.",
+          "description": "TTS backend. 'gemini' = Gemini API (API klíč), 'xtts' = lokální XTTS v2 (coqui-tts, GPU), 'mock' = offline testovací tóny bez volání API.",
           "enum": [
             "gemini",
+            "xtts",
             "mock"
           ],
           "title": "Name",
           "type": "string"
         },
         "model": {
-          "default": "gemini-3.8-flash-tts",
-          "description": "Model Gemini TTS, např. 'gemini-3.8-flash-tts' nebo 'gemini-3.8-flash-lite-tts'.",
-          "title": "Model",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Model enginu. Když chybí, použije se výchozí: gemini → 'gemini-3.8-flash-tts', xtts → 'tts_models/multilingual/multi-dataset/xtts_v2' (u xtts jde zadat i složku se staženým modelem).",
+          "title": "Model"
         },
         "sample_rate": {
           "default": 24000,
@@ -633,6 +658,84 @@
         "text"
       ],
       "title": "Segment",
+      "type": "object"
+    },
+    "XttsVoice": {
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": [
+            "reference"
+          ]
+        },
+        {
+          "required": [
+            "speaker"
+          ]
+        }
+      ],
+      "properties": {
+        "reference": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Referenční nahrávka hlasu (WAV, 6–30 s čisté řeči bez hudby a šumu) nebo seznam nahrávek. Cesta relativně k souboru knihy.",
+          "title": "Reference"
+        },
+        "speaker": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Vestavěný hlas XTTS (např. 'Claribel Dervla', 'Damien Black'). Buď `reference`, nebo `speaker`.",
+          "title": "Speaker"
+        },
+        "styles": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
+          "description": "Nahrávky pro různé polohy hlasu: {klíčové slovo: nahrávka}. Když se klíčové slovo objeví ve složené režii (např. 'šeptem'), použije se jeho nahrávka; při více shodách vyhrává ta nejvíc vpravo (nejkonkrétnější úroveň). Jinak platí `reference` / `speaker`.",
+          "propertyNames": {
+            "minLength": 1
+          },
+          "title": "Styles",
+          "type": "object"
+        }
+      },
+      "title": "XttsVoice",
       "type": "object"
     }
   },
