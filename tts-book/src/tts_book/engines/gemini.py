@@ -76,13 +76,19 @@ def extract_pcm(response: dict[str, Any], *, sample_rate: int) -> bytes:
 
 
 def _error_message(resp: httpx.Response) -> str:
+    """Google vrací chybu jako {"error": …} i jako [{"error": …}]."""
     try:
-        err = resp.json().get("error", {})
-        msg = err.get("message") or resp.text
-        status = err.get("status")
-        return f"HTTP {resp.status_code}{' ' + status if status else ''}: {msg}"
+        payload = resp.json()
     except ValueError:
         return f"HTTP {resp.status_code}: {resp.text[:300]}"
+    if isinstance(payload, list) and payload:
+        payload = payload[0]
+    err = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(err, dict):
+        return f"HTTP {resp.status_code}: {resp.text[:300]}"
+    msg = err.get("message") or resp.text[:300]
+    status = err.get("status")
+    return f"HTTP {resp.status_code}{' ' + status if status else ''}: {msg}"
 
 
 class GeminiEngine:

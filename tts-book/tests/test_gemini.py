@@ -143,6 +143,29 @@ def test_synthesize_client_error_is_not_retried(monkeypatch):
     assert calls["n"] == 1
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [{"error": {"code": 403, "message": "IP address restriction", "status": "PERMISSION_DENIED"}}],
+        {"error": {"code": 403, "message": "IP address restriction", "status": "PERMISSION_DENIED"}},
+    ],
+)
+def test_error_payload_as_list_or_object(payload):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json=payload)
+
+    with pytest.raises(EngineError, match="HTTP 403 PERMISSION_DENIED: IP address restriction"):
+        _engine(handler).synthesize(_job())
+
+
+def test_error_payload_unexpected_shape():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json=["něco jiného"])
+
+    with pytest.raises(EngineError, match="HTTP 403"):
+        _engine(handler).synthesize(_job())
+
+
 def test_from_env_requires_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
