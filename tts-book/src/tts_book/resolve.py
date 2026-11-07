@@ -456,3 +456,63 @@ def chapter_timeline(book: Book, chapter: ChapterPlan) -> list[Item]:
             items.append(Silence(para.pause_after))
     items.append(Silence(pauses.chapter_end))
     return items
+
+
+# --- Rychlá zkouška hlasu (say) ----------------------------------------------
+
+
+def say_voice(engine: str, voice: str | None) -> str:
+    """Hlas pro `say`: u xtts cesta k WAV → 'wav:…', jinak jméno vestavěného hlasu → 'speaker:…'."""
+    if engine != "xtts":
+        return voice or "Kore"
+    if not voice:
+        raise ValueError("U xtts zadej hlas: cestu k WAV nahrávce nebo jméno vestavěného hlasu.")
+    if voice.lower().endswith(".wav"):
+        return xtts.wav_spec(voice)
+    return xtts.speaker_spec(voice)
+
+
+def say_jobs(
+    *,
+    engine: str,
+    model: str,
+    voice: str,
+    text: str,
+    language: str,
+    style: str | None,
+    sample_rate: int,
+) -> list[Job]:
+    """Požadavky pro zkoušku hlasu na jedné replice; u xtts rozdělené podle limitu jazyka."""
+    if engine == "xtts":
+        if xtts.xtts_language(language) is None:
+            raise ValueError(f"XTTS nepodporuje jazyk '{language}'.")
+        style = None
+        prepared = strip_tags(text)
+        chunks = chunk_text(prepared, xtts.char_limit(language)) if prepared else []
+    else:
+        prepared = convert_tags(normalize_whitespace(text))
+        chunks = [prepared] if prepared else []
+    if not chunks:
+        raise ValueError("Prázdný text.")
+    return [
+        Job(
+            key=job_key(
+                engine=engine,
+                model=model,
+                voice=voice,
+                style=style,
+                text=chunk,
+                sample_rate=sample_rate,
+                language=language if engine == "xtts" else None,
+            ),
+            text=chunk,
+            voice=voice,
+            style=style,
+            speaker="say",
+            language=language,
+            engine=engine,
+            model=model,
+            sample_rate=sample_rate,
+        )
+        for chunk in chunks
+    ]

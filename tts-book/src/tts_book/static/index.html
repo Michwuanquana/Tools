@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tts-book studio</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --panel-2: #efede8; --text: #1d1c1a; --muted: #6b6862;
+  --line: #dcd8d0; --accent: #2f5bd3; --accent-text: #ffffff; --ok: #2c7a4b; --warn: #a86a00;
+  --err: #b3261e; --play: #fff4d6; --chip: #e8e5de;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615; --panel: #1f1f1d; --panel-2: #282825; --text: #ecebe7; --muted: #9c9991;
+    --line: #36352f; --accent: #7aa2ff; --accent-text: #0d1430; --ok: #6fcf97; --warn: #f2c14e;
+    --err: #ff8a80; --play: #3a3320; --chip: #2f2e2a;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", sans-serif; display: flex; flex-direction: column; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button {
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+button.small { padding: 2px 8px; font-size: 12.5px; }
+input, select, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; }
+textarea { width: 100%; resize: vertical; min-height: 70px; }
+a { color: var(--accent); }
+
+header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+header h1 { font-size: 17px; margin: 0; }
+header .path { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+.controls label { color: var(--muted); font-size: 12.5px; }
+#model { width: 270px; }
+
+#statusbar { background: var(--panel); border-bottom: 1px solid var(--line); padding: 6px 16px; display: flex; gap: 12px; align-items: center; min-height: 38px; font-size: 13px; }
+#statusbar .bar { flex: 0 0 220px; height: 8px; background: var(--panel-2); border-radius: 4px; overflow: hidden; border: 1px solid var(--line); }
+#statusbar .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+#statusbar .msg { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.state-error { color: var(--err); } .state-done { color: var(--ok); } .state-cancelled { color: var(--warn); }
+
+#layout { flex: 1; display: grid; grid-template-columns: 260px 1fr 330px; min-height: 0; }
+nav, aside { background: var(--panel); overflow: auto; padding: 12px; }
+nav { border-right: 1px solid var(--line); }
+aside { border-left: 1px solid var(--line); }
+#content { overflow: auto; padding: 14px 18px 30px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 8px; }
+h2:first-child { margin-top: 0; }
+
+.chap { padding: 7px 9px; border-radius: 6px; cursor: pointer; margin-bottom: 3px; }
+.chap:hover { background: var(--panel-2); }
+.chap.sel { background: var(--panel-2); outline: 1px solid var(--line); }
+.chap .t { font-weight: 600; }
+.chap .meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+.mini { flex: 1; height: 4px; background: var(--chip); border-radius: 2px; overflow: hidden; }
+.mini > div { height: 100%; background: var(--ok); }
+.outputs a { display: block; font-size: 12.5px; padding: 2px 0; word-break: break-all; }
+
+.msgs details { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; }
+.msgs summary { cursor: pointer; font-weight: 600; }
+.msgs ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+.msgs .e { color: var(--err); } .msgs .w { color: var(--warn); }
+
+.chhead { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+.chhead h3 { margin: 0 10px 0 0; font-size: 18px; }
+.para { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; }
+.para.playing { background: var(--play); }
+.para .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.para .pid { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.para .acts { margin-left: auto; display: flex; gap: 6px; }
+.chip { font-size: 11.5px; padding: 1px 7px; border-radius: 10px; background: var(--chip); color: var(--muted); }
+.chip.ok { color: var(--ok); } .chip.miss { color: var(--warn); }
+.seg { display: grid; grid-template-columns: 150px 1fr; gap: 4px 10px; padding: 4px 0; border-top: 1px dashed var(--line); }
+.seg:first-of-type { border-top: 0; }
+.seg .who { font-size: 12.5px; }
+.seg .who b { display: block; }
+.seg .who span { color: var(--muted); display: block; word-break: break-word; }
+.seg .txt { white-space: pre-wrap; }
+.seg .txt .style { display: block; color: var(--muted); font-style: italic; font-size: 12.5px; }
+.seg .txt .clip { margin-left: 6px; }
+.gap { color: var(--muted); font-size: 11.5px; text-align: right; }
+.empty { color: var(--muted); padding: 30px 0; text-align: center; }
+
+aside label { display: block; color: var(--muted); font-size: 12.5px; margin: 8px 0 3px; }
+aside input { width: 100%; }
+aside .row { display: flex; gap: 8px; margin-top: 10px; }
+.cast { font-size: 12.5px; }
+.cast div { padding: 3px 0; border-bottom: 1px dashed var(--line); }
+.cast b { font-family: var(--mono); font-weight: 600; }
+.cast span { color: var(--muted); }
+
+footer { background: var(--panel); border-top: 1px solid var(--line); padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+footer audio { flex: 1; min-width: 260px; height: 36px; }
+footer .now { font-size: 13px; color: var(--muted); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+footer label { font-size: 12.5px; color: var(--muted); display: flex; gap: 5px; align-items: center; }
+
+@media (max-width: 1100px) {
+  #layout { grid-template-columns: 220px 1fr; }
+  aside { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+}
+@media (max-width: 720px) {
+  #layout { grid-template-columns: 1fr; }
+  nav { border-right: 0; border-bottom: 1px solid var(--line); max-height: 220px; }
+  .seg { grid-template-columns: 1fr; }
+  #model { width: 100%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="title">tts-book</h1>
+    <div class="path" id="path"></div>
+  </div>
+  <div class="controls">
+    <label for="engine">engine</label>
+    <select id="engine"></select>
+    <label for="model">model</label>
+    <input id="model" placeholder="výchozí">
+    <button id="btn-missing" class="primary" title="Vygeneruje všechny úseky, které nejsou v cache">Vygenerovat chybějící</button>
+    <button id="btn-assemble" title="Složí kapitoly do souborů ve výstupní složce">Složit kapitoly</button>
+    <button id="btn-unload" title="Uvolní načtený model z paměti GPU">Uvolnit model</button>
+  </div>
+</header>
+<div id="statusbar">
+  <span id="st-state">připraveno</span>
+  <div class="bar"><div id="st-bar"></div></div>
+  <span id="st-count"></span>
+  <span class="msg" id="st-msg"></span>
+  <button id="btn-cancel" class="small" hidden>Zrušit</button>
+</div>
+<div id="layout">
+  <nav>
+    <h2>Kapitoly</h2>
+    <div id="chapters"></div>
+    <h2>Výstup</h2>
+    <div class="outputs" id="outputs"></div>
+  </nav>
+  <section id="content">
+    <div class="msgs" id="msgs"></div>
+    <div id="chapter"></div>
+  </section>
+  <aside>
+    <h2>Zkouška hlasu</h2>
+    <label for="say-voice">hlas</label>
+    <input id="say-voice" list="voices" placeholder="např. Damien Black nebo hlasy/marta.wav">
+    <datalist id="voices"></datalist>
+    <label for="say-lang">jazyk</label>
+    <input id="say-lang" placeholder="cs-CZ">
+    <div id="say-style-wrap">
+      <label for="say-style">režie (jen gemini)</label>
+      <input id="say-style" placeholder="šeptem, ustaraně">
+    </div>
+    <label for="say-text">text</label>
+    <textarea id="say-text">Ahoj, tohle je zkouška hlasu.</textarea>
+    <div class="row"><button id="btn-say" class="primary">Přečíst</button></div>
+    <h2>Obsazení</h2>
+    <div class="cast" id="cast"></div>
+  </aside>
+</div>
+<footer>
+  <span class="now" id="now">nic nehraje</span>
+  <audio id="player" controls preload="none"></audio>
+  <label><input type="checkbox" id="autoplay" checked> pokračovat dalším odstavcem</label>
+</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs = {}, ...children) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat()) if (c != null) n.append(c instanceof Node ? c : String(c));
+  return n;
+};
+const store = {
+  get(k, d) { try { return localStorage.getItem("tts-book:" + k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("tts-book:" + k, v); } catch { /* bez úložiště */ } },
+};
+
+const S = { book: null, chapter: store.get("chapter", null), status: null, playing: null, lastSig: "", lastSay: null };
+
+async function api(path, body) {
+  const opts = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
+const engine = () => $("engine").value;
+const model = () => $("model").value.trim();
+const qs = (extra = {}) => new URLSearchParams({ engine: engine(), model: model(), ...extra }).toString();
+const sel = () => ({ engine: engine(), model: model() || null });
+
+function fmt(sec) {
+  if (sec == null) return "";
+  const s = Math.round(sec), m = Math.floor(s / 60);
+  return m ? `${m}:${String(s % 60).padStart(2, "0")}` : `${s} s`;
+}
+function voiceLabel(v) {
+  if (!v) return "";
+  if (v.startsWith("speaker:")) return v.slice(8);
+  if (v.startsWith("wav:")) return "🎙 " + v.slice(4).split("|").join(", ");
+  return v;
+}
+function toast(msg, isErr = true) {
+  $("st-msg").textContent = msg;
+  $("st-msg").className = "msg " + (isErr ? "state-error" : "");
+}
+
+// --- Kniha ---------------------------------------------------------------------
+
+async function loadBook() {
+  try {
+    S.book = await api("/api/book?" + qs());
+  } catch (e) { toast(e.message); return; }
+  render();
+}
+
+function render() {
+  const b = S.book;
+  document.title = (b.title ? b.title + " – " : "") + "tts-book studio";
+  $("title").textContent = b.title || "tts-book";
+  $("path").textContent = b.path || "";
+  if ($("engine").options.length === 0) {
+    for (const e of b.engines) $("engine").append(el("option", { value: e }, e));
+    $("engine").value = store.get("engine", b.engine);
+    $("model").value = store.get("model:" + engine(), "");
+    if (engine() !== b.engine || model()) { loadBook(); loadVoices(); return; }
+  }
+  $("model").placeholder = b.default_model ? "výchozí: " + b.default_model : "výchozí";
+  $("say-style-wrap").hidden = engine() === "xtts";
+  if (!$("say-lang").value) $("say-lang").value = b.language || "cs-CZ";
+
+  const msgs = $("msgs");
+  msgs.replaceChildren();
+  const problems = [...(b.problems || []), ...(b.errors || [])];
+  if (problems.length) {
+    msgs.append(el("details", { open: true }, el("summary", { class: "e" }, `Chyby (${problems.length})`),
+      el("ul", {}, problems.map((p) => el("li", { class: "e" }, p)))));
+  }
+  if ((b.warnings || []).length) {
+    msgs.append(el("details", {}, el("summary", { class: "w" }, `Upozornění (${b.warnings.length})`),
+      el("ul", {}, b.warnings.map((p) => el("li", { class: "w" }, p)))));
+  }
+
+  const chapters = b.chapters || [];
+  if (!chapters.some((c) => c.id === S.chapter)) S.chapter = chapters[0]?.id ?? null;
+  $("chapters").replaceChildren(...chapters.map((c) => el("div", {
+    class: "chap" + (c.id === S.chapter ? " sel" : ""),
+    onclick: () => { S.chapter = c.id; store.set("chapter", c.id); render(); },
+  }, el("div", { class: "t" }, `${String(c.index).padStart(2, "0")} ${c.title || c.id}`),
+     el("div", { class: "meta" }, `${c.cached}/${c.jobs}`,
+        el("div", { class: "mini" }, el("div", { style: `width:${c.jobs ? (100 * c.cached / c.jobs) : 0}%` }))))));
+  if (!chapters.length) $("chapters").append(el("div", { class: "empty" }, "žádné kapitoly"));
+
+  $("outputs").replaceChildren(...(b.outputs || []).map((f) =>
+    el("a", { href: "/api/output/" + encodeURIComponent(f), target: "_blank" }, f)));
+  if (!(b.outputs || []).length) $("outputs").append(el("span", { class: "chip" }, "zatím nic – Složit kapitoly"));
+
+  $("cast").replaceChildren(...(b.cast || []).map((c) => el("div", {},
+    el("b", {}, c.id), c.name ? " " + c.name : "", el("br"),
+    el("span", {}, engine() === "xtts"
+      ? (c.xtts ? (c.xtts.speaker || "🎙 " + [].concat(c.xtts.reference).join(", ")) +
+          (c.xtts.styles ? " · styly: " + Object.keys(c.xtts.styles).join(", ") : "") : "— chybí xtts")
+      : (c.voice || "— chybí voice")))));
+
+  renderChapter();
+  updateButtons();
+}
+
+function paraState(p) {
+  const sp = p.items.filter((i) => i.kind === "speech");
+  const cached = sp.filter((i) => i.cached).length;
+  return { total: sp.length, cached, full: cached === sp.length && sp.length > 0,
+           duration: sp.reduce((a, i) => a + (i.duration || 0), 0) };
+}
+
+function renderChapter() {
+  const box = $("chapter");
+  const c = (S.book.chapters || []).find((x) => x.id === S.chapter);
+  if (!c) { box.replaceChildren(el("div", { class: "empty" }, "Vyber kapitolu.")); return; }
+  const done = c.cached === c.jobs;
+  const head = el("div", { class: "chhead" },
+    el("h3", {}, c.title || c.id),
+    el("span", { class: "chip " + (done ? "ok" : "miss") }, `${c.cached}/${c.jobs} úseků`),
+    el("button", { disabled: !done, onclick: () => play({ type: "chapter", id: c.id }) }, "▶ Přehrát kapitolu"),
+    el("button", { disabled: done, onclick: () => run("/api/synthesize", { ...sel(), chapters: [c.id] }) }, "Vygenerovat chybějící"),
+    el("button", { onclick: () => run("/api/assemble", { ...sel(), chapters: [c.id] }) }, "Složit"),
+  );
+  const nodes = [head];
+  if (c.title_item) nodes.push(paraCard({ id: c.id + " (název)", items: [c.title_item], title: true }));
+  for (const p of c.paragraphs) nodes.push(paraCard(p));
+  box.replaceChildren(...nodes);
+}
+
+function paraCard(p) {
+  const st = paraState(p);
+  const playing = S.playing && ((S.playing.type === "paragraph" && S.playing.id === p.id) ||
+    (S.playing.type === "clip" && p.items.some((i) => i.key === S.playing.id)));
+  const acts = el("div", { class: "acts" });
+  if (!p.title) {
+    acts.append(
+      el("button", { class: "small", disabled: !st.full, onclick: () => play({ type: "paragraph", id: p.id }) }, "▶"),
+      el("button", { class: "small", title: "Vygeneruje znovu (nová verze nahradí tu v cache)",
+        onclick: () => run("/api/synthesize", { ...sel(), paragraphs: [p.id], force: true }) }, st.cached ? "↻ Přegenerovat" : "Vygenerovat"),
+    );
+  } else if (st.full) {
+    acts.append(el("button", { class: "small", onclick: () => play({ type: "clip", id: p.items[0].key, label: p.id }) }, "▶"));
+  }
+  const card = el("div", { class: "para" + (playing ? " playing" : ""), id: "p-" + p.id },
+    el("div", { class: "top" },
+      el("span", { class: "pid" }, p.id),
+      el("span", { class: "chip " + (st.full ? "ok" : "miss") },
+        st.full ? "✓ " + fmt(st.duration) : `${st.cached}/${st.total} v cache`),
+      p.chars ? el("span", { class: "chip" }, `${p.chars} zn`) : null,
+      acts));
+  for (const it of p.items) {
+    if (it.kind === "silence") continue;
+    const lang = S.book && it.language !== S.book.language ? ` · ${it.language}` : "";
+    card.append(el("div", { class: "seg" },
+      el("div", { class: "who" }, el("b", {}, it.speaker), el("span", {}, voiceLabel(it.voice) + lang)),
+      el("div", { class: "txt" },
+        it.style ? el("span", { class: "style" }, it.style) : null,
+        it.text,
+        it.cached ? el("button", { class: "small clip", title: "Přehrát jen tento úsek",
+          onclick: () => play({ type: "clip", id: it.key, label: `${p.id} · ${it.speaker}` }) }, "▸") : null)));
+  }
+  return card;
+}
+
+// --- Přehrávání ----------------------------------------------------------------
+
+function play(what) {
+  S.playing = what;
+  const a = $("player");
+  let url, label;
+  if (what.type === "paragraph") { url = "/api/paragraph.wav?" + qs({ id: what.id }); label = what.id; }
+  else if (what.type === "chapter") { url = "/api/chapter.wav?" + qs({ id: what.id }); label = "kapitola " + what.id; }
+  else if (what.type === "clip") { url = `/api/clip/${what.id}.wav`; label = what.label || "úsek"; }
+  else { url = `/api/say/${what.id}.wav`; label = "zkouška hlasu"; }
+  a.src = url;
+  a.play().catch((e) => toast("Přehrání selhalo: " + e.message));
+  $("now").textContent = "▶ " + label;
+  if (S.book) renderChapter();
+  document.getElementById("p-" + what.id)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+$("player").addEventListener("ended", () => {
+  const cur = S.playing;
+  if (!cur || cur.type !== "paragraph" || !$("autoplay").checked) return;
+  const all = (S.book.chapters || []).flatMap((c) => c.paragraphs);
+  const i = all.findIndex((p) => p.id === cur.id);
+  const next = all.slice(i + 1).find((p) => paraState(p).full);
+  if (next) {
+    const ch = S.book.chapters.find((c) => c.paragraphs.includes(next));
+    if (ch && ch.id !== S.chapter) { S.chapter = ch.id; store.set("chapter", ch.id); render(); }
+    play({ type: "paragraph", id: next.id });
+  }
+});
+$("player").addEventListener("error", () => { if ($("player").src) toast("Audio se nepodařilo načíst (není vygenerované?)"); });
+
+// --- Úlohy ---------------------------------------------------------------------
+
+async function run(path, body) {
+  try {
+    const task = await api(path, body);
+    S.status = { busy: true, task };
+    renderStatus();
+  } catch (e) { toast(e.message); }
+}
+
+function updateButtons() {
+  const busy = !!(S.status && S.status.busy);
+  for (const id of ["btn-missing", "btn-assemble", "btn-unload", "btn-say"]) $(id).disabled = busy;
+  const b = S.book;
+  if (b && !busy) $("btn-missing").disabled = !b.jobs || b.cached === b.jobs;
+  document.querySelectorAll("#chapter button").forEach((x) => { if (busy && !x.textContent.startsWith("▶") && x.textContent !== "▸") x.disabled = true; });
+}
+
+function renderStatus() {
+  const st = S.status, t = st && st.task;
+  const stateNames = { queued: "ve frontě", loading: "načítám model", running: "pracuji", done: "hotovo", error: "chyba", cancelled: "zrušeno" };
+  if (!t) { $("st-state").textContent = "připraveno"; $("btn-cancel").hidden = true; return; }
+  $("st-state").textContent = `${stateNames[t.state] || t.state}: ${t.label}`;
+  $("st-state").className = "state-" + t.state;
+  $("st-bar").style.width = t.total ? (100 * t.done / t.total) + "%" : (st.busy ? "5%" : "0");
+  $("st-count").textContent = t.total ? `${t.done}/${t.total} · ${fmt(t.elapsed)}` : (t.elapsed ? fmt(t.elapsed) : "");
+  const msg = [t.current, t.message, ...(t.errors || []).slice(-3)].filter(Boolean).join(" · ");
+  $("st-msg").textContent = msg;
+  $("st-msg").className = "msg" + (t.errors && t.errors.length || t.state === "error" ? " state-error" : "");
+  $("btn-cancel").hidden = !st.busy;
+  updateButtons();
+}
+
+async function poll() {
+  try {
+    const st = await api("/api/status");
+    const t = st.task;
+    const sig = [st.mtime, t && t.id, t && t.state, t && t.done].join("|");
+    const finished = S.status && S.status.busy && !st.busy;
+    S.status = st;
+    renderStatus();
+    if (sig !== S.lastSig) {
+      S.lastSig = sig;
+      await loadBook();
+    }
+    if (finished && t && t.kind === "say" && t.result && t.result.say && t.result.say !== S.lastSay) {
+      S.lastSay = t.result.say;
+      play({ type: "say", id: t.result.say });
+    }
+  } catch (e) { $("st-state").textContent = "server neodpovídá"; $("st-state").className = "state-error"; }
+  setTimeout(poll, S.status && S.status.busy ? 700 : 2000);
+}
+
+// --- Ovládání ------------------------------------------------------------------
+
+async function loadVoices() {
+  try {
+    const { voices } = await api("/api/voices?" + qs());
+    $("voices").replaceChildren(...voices.map((v) => el("option", { value: v })));
+  } catch { /* nevadí */ }
+}
+$("engine").addEventListener("change", () => {
+  store.set("engine", engine());
+  $("model").value = store.get("model:" + engine(), "");
+  $("say-voice").value = store.get("say-voice:" + engine(), "");
+  loadVoices(); loadBook();
+});
+$("model").addEventListener("change", () => { store.set("model:" + engine(), model()); loadBook(); });
+$("btn-missing").addEventListener("click", () => run("/api/synthesize", sel()));
+$("btn-assemble").addEventListener("click", () => run("/api/assemble", sel()));
+$("btn-unload").addEventListener("click", () => run("/api/unload", {}));
+$("btn-cancel").addEventListener("click", () => api("/api/cancel", {}).catch((e) => toast(e.message)));
+$("btn-say").addEventListener("click", () => {
+  const voice = $("say-voice").value.trim();
+  store.set("say-voice:" + engine(), voice);
+  run("/api/say", { ...sel(), voice, text: $("say-text").value, language: $("say-lang").value.trim(), style: $("say-style").value.trim() });
+});
+
+(async function init() {
+  await loadBook();
+  $("say-voice").value = store.get("say-voice:" + engine(), "");
+  loadVoices();
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -70,15 +70,20 @@ def synthesize(
     *,
     force: bool = False,
     progress: ProgressFn | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> SynthesisResult:
     """Vygeneruje úseky, které nejsou v cache (nebo všechny při `force`).
 
     Po několika chybách za sebou skončí (typicky špatný klíč nebo vyčerpaná kvóta),
-    ať se zbytečně nevolá API pro stovky dalších odstavců.
+    ať se zbytečně nevolá API pro stovky dalších odstavců. `should_stop` umožní běh
+    přerušit mezi úseky (webové rozhraní); přerušení se hlásí jako `aborted`.
     """
     result = SynthesisResult()
     consecutive = 0
     for job in unique_jobs(jobs):
+        if should_stop is not None and should_stop():
+            result.aborted = True
+            break
         if not force and cache.has(job.key):
             result.cached += 1
             if progress:

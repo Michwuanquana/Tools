@@ -1,4 +1,4 @@
-"""Příkazová řádka: tts-book validate | plan | render | say | schema."""
+"""Příkazová řádka: tts-book validate | plan | render | say | serve | schema."""
 
 from __future__ import annotations
 
@@ -28,8 +28,8 @@ from .render import (
     unique_jobs,
     write_preview,
 )
-from .resolve import Job, Report, build_plan, check, job_key
-from .text import chunk_text, convert_tags, normalize_whitespace, strip_tags
+from .resolve import Job, Report, build_plan, check, say_jobs, say_voice
+from .text import strip_tags
 
 app = typer.Typer(
     add_completion=False,
@@ -317,19 +317,6 @@ def _warn_cpu(tts: object) -> None:
         )
 
 
-def _say_voice(engine: str, voice: str | None) -> str:
-    if engine != "xtts":
-        return voice or "Kore"
-    from .xtts import speaker_spec, wav_spec
-
-    if not voice:
-        err_console.print("[red]U xtts zadej --voice: cestu k WAV nahrávce nebo jméno vestavěného hlasu.[/]")
-        raise typer.Exit(1)
-    if voice.lower().endswith(".wav") or Path(voice).is_file():
-        return wav_spec(voice)
-    return speaker_spec(voice)
-
-
 @app.command()
 def say(
     text: Annotated[str, typer.Argument(help="Text k přečtení (lze použít značky jako [sigh]).")],
@@ -353,50 +340,34 @@ def say(
     from .model import Book as _Book
 
     _check_engine_name(engine)
-    job_voice = _say_voice(engine, voice)
-    book = _Book.model_validate(
-        {
-            "version": 1,
-            "meta": {"title": "say", "language": language},
-            "engine": {"name": engine, "model": model},
-            "cast": {"x": {"voice": job_voice}},
-            "defaults": {"speaker": "x"},
-            "chapters": [{"paragraphs": [text]}],
-        }
-    )
-    model_name = model_for(book, engine, model)
-    sr = book.engine.sample_rate
-    if engine == "xtts":
-        from .xtts import char_limit, xtts_language
-
-        if xtts_language(language) is None:
-            err_console.print(f"[red]XTTS nepodporuje jazyk '{language}'.[/]")
-            raise typer.Exit(1)
-        if style:
-            err_console.print("[yellow]pozor[/]  XTTS režii (--style) nepodporuje, ignoruji ji.")
-        style = None
-        prepared = strip_tags(text)
-        chunks = chunk_text(prepared, char_limit(language)) if prepared else []
-    else:
-        chunks = [convert_tags(normalize_whitespace(text))]
-    if not chunks:
-        err_console.print("[red]Prázdný text.[/]")
-        raise typer.Exit(1)
-
-    jobs = [
-        Job(
-            key=job_key(engine=engine, model=model_name, voice=job_voice, style=style, text=chunk, sample_rate=sr),
-            text=chunk,
-            voice=job_voice,
-            style=style,
-            speaker="x",
-            language=language,
+    if engine == "xtts" and style:
+        err_console.print("[yellow]pozor[/]  XTTS režii (--style) nepodporuje, ignoruji ji.")
+    try:
+        job_voice = say_voice(engine, voice)
+        book = _Book.model_validate(
+            {
+                "version": 1,
+                "meta": {"title": "say", "language": language},
+                "engine": {"name": engine, "model": model},
+                "cast": {"x": {"voice": job_voice}},
+                "defaults": {"speaker": "x"},
+                "chapters": [{"paragraphs": [text]}],
+            }
+        )
+        model_name = model_for(book, engine, model)
+        sr = book.engine.sample_rate
+        jobs = say_jobs(
             engine=engine,
             model=model_name,
+            voice=job_voice,
+            text=text,
+            language=language,
+            style=style,
             sample_rate=sr,
         )
-        for chunk in chunks
-    ]
+    except ValueError as exc:
+        err_console.print(f"[red]{escape(str(exc))}[/]")
+        raise typer.Exit(1) from None
     if engine == "xtts":
         _require_references(jobs, Path.cwd())
     pcm: list[bytes] = []
@@ -413,6 +384,44 @@ def say(
         raise typer.Exit(1) from None
     write_wav(out, pcm, sr)
     console.print(f"[green]✓[/] {out} ({_fmt_duration(sum(map(len, pcm)) / (2 * sr))})")
+
+
+@app.command()
+def serve(
+    book_path: BookArg,
+    engine: EngineOpt = None,
+    model: ModelOpt = None,
+    host: Annotated[str, typer.Option(help="Adresa serveru. Jiná než 127.0.0.1 zpřístupní GUI v síti bez hesla.")] = (
+        "127.0.0.1"
+    ),
+    port: Annotated[int, typer.Option(help="Port serveru.")] = 8765,
+    open_browser: Annotated[bool, typer.Option("--open/--no-open", help="Otevřít prohlížeč.")] = True,
+) -> None:
+    """Webové rozhraní: poslech a přegenerování odstavců, zkouška hlasů, skládání kapitol."""
+    import webbrowser
+
+    from .web import Studio, make_server
+
+    _check_engine_name(engine)
+    studio = Studio(book_path, engine=engine, model=model)
+    try:
+        server = make_server(studio, host, port)
+    except OSError as exc:
+        err_console.print(f"[red]Server nejde spustit na {host}:{port}: {exc}[/]")
+        raise typer.Exit(1) from None
+    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{server.server_address[1]}/"
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        err_console.print("[yellow]pozor[/]  GUI nemá přihlášení – kdokoli v síti může spouštět syntézu.")
+    console.print(f"tts-book studio: [bold]{url}[/]  (Ctrl+C ukončí)")
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        studio.close()
 
 
 @app.command()

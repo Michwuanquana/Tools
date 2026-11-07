@@ -69,6 +69,31 @@ tts-book plan examples/majak.book.yaml
 tts-book render examples/majak.book.yaml
 ```
 
+### Webové rozhraní
+
+```sh
+tts-book serve examples/majak.book.yaml                  # http://127.0.0.1:8765, otevře prohlížeč
+tts-book serve kniha.book.yaml --engine xtts --model C:\modely\XTTS-v2 --port 8800 --no-open
+```
+
+V prohlížeči vidíš kapitoly a odstavce. U každého úseku je mluvčí, hlas, režie
+a jestli už je vygenerovaný. V rozhraní jde:
+
+- přehrát odstavec, jeden úsek nebo celou kapitolu, volitelně plynule dalším odstavcem,
+- přegenerovat odstavec (nová verze nahradí tu v cache), vygenerovat chybějící úseky
+  kapitoly nebo celé knihy, průběh sledovat a běh zrušit,
+- vyzkoušet hlas na libovolné větě (jako `say`; cesty k nahrávkám jsou relativně k souboru knihy),
+- přepnout engine a model, složit kapitoly do MP3/WAV a stáhnout je,
+- uvolnit model z paměti GPU.
+
+Knihu dál upravuješ v editoru. Server soubor po uložení znovu načte a změněné
+odstavce ukáže jako nevygenerované. Model zůstává načtený po celou dobu běhu
+serveru, takže přegenerování odstavce přes XTTS trvá jen pár sekund. Najednou
+běží jen jedna úloha.
+
+Server poslouchá jen na `127.0.0.1` a nemá přihlášení. `--host 0.0.0.0` ho
+zpřístupní celé síti, takže to používej jen v důvěryhodné LAN.
+
 Další možnosti:
 
 ```sh
@@ -110,6 +135,9 @@ kniha.book.yaml
   → skládání kapitol             render.assemble_chapter + audio.py (ffmpeg)
 ```
 
+Webové rozhraní (`web.py` + `static/index.html`) používá stejné funkce. Běží na
+`http.server` ze standardní knihovny a syntézu dělá v jednom pracovním vlákně.
+
 Napojení na Gemini API (`v1beta/interactions`) je celé v
 `src/tts_book/engines/gemini.py` – API je v betě, případné změny se opraví tam.
 XTTS je v `src/tts_book/engines/xtts.py` (torch se importuje až při vytvoření
@@ -130,5 +158,6 @@ uvx ruff check src tests && uvx ruff format --check src tests
 - [ ] **Fáze 2:** normalizace hlasitosti, M4B s kapitolami, paralelní požadavky, Batch API (½ ceny)
 - [ ] **Fáze 3:** import z txt/md (později epub), automatické vytvoření hlasů z `design`,
   výpis knihovny hlasů
+- [x] Webové rozhraní pro poslech a ladění odstavců (`tts-book serve`)
 - [ ] **Fáze 4:** automatická režie přes LLM, dialogový režim (2 mluvčí v jednom
-  požadavku), webové rozhraní pro poslech a ladění odstavců
+  požadavku), úpravy textu a režie přímo v rozhraní
